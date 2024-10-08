@@ -1,85 +1,74 @@
 /// <reference path="./discord/presence.d.ts" />
 import WebSocket from 'ws';
-//import DiscordRPC from 'discord-rpc';
 import { DiscordActivity } from './discord';
 
 const port: number = 1488 | 35654;
+var serverRunning = false;
 var server: WebSocket.Server;
 
-//var rpc: DiscordRPC.Client = new DiscordRPC.Client({ transport: 'ipc' });
-
+var stopServer: () => Promise<void> = async () => { return Promise.resolve(); };
 var startServer: () => void = () => { };
-
-var AskActivity: () => void = () => { };
-
-/*rpc.on('ready', () => {
-    console.log('Discord RPC is ready');
-});*/
-
-function sleep(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
-}
 
 var activity_manager = new DiscordActivity();
 
-function SetActivity(activity: IActivityArgs = {} as IActivityArgs, reset: boolean = true) {
+activity_manager.on('ready', () => {
+    console.log('Discord RPC connected');
+    startServer();
+})
 
-    /*rpc.request("SET_ACTIVITY", {
-        pid: process.pid,
-        activity: reset ? null : activity
-    }).then(() => {
+activity_manager.on('disconnect', async () => {
+    console.log('Discord RPC disconnected');
+    await stopServer();
+})
 
-        console.log("Activity set");
-    }).catch((e) => console.error(e))*/
-}
-
-/*async function connect(clientId: string): Promise<void> {
-    const maxRetries = 5;
-    let attempts = 0;
-
-    while (attempts < maxRetries) {
-        try {
-            if (rpc._connectPromise) {
-                return rpc._connectPromise;
-            }
-            rpc._connectPromise = new Promise((resolve, reject) => {
-                rpc.clientId = clientId;
-                const timeout = setTimeout(() => reject(new Error('RPC_CONNECTION_TIMEOUT')), 10e3);
-                timeout.unref();
-                rpc.once('connected', () => {
-                    clearTimeout(timeout);
-                    resolve(rpc);
-                });
-                rpc.transport.once('close', () => {
-                    rpc._expecting.forEach((e) => {
-                        e.reject(new Error('connection closed'));
-                    });
-                    rpc.emit('disconnected');
-                    reject(new Error('connection closed'));
-                });
-                rpc.transport.connect().catch(reject);
-            });
-            await rpc._connectPromise;
-            rpc.emit('ready');
-            console.log("Connected to Discord RPC");
-            return;
-        } catch (error) {
-            attempts++;
-            console.error(`Failed to connect to Discord RPC (Attempt ${attempts}/${maxRetries}):`, error);
-            if (attempts < maxRetries) {
-                console.log(`Retrying in 5 seconds...`);
-                await delay(5000);
-            } else {
-                console.error("Max retries reached. Could not connect to Discord RPC.");
-                process.exit(0);
-            }
-        }
+activity_manager.on('error', (error: Error) => {
+    switch (true) {
+        case error.message.includes('No valid application'):
+            console.error('No valid application ID provided');
+            break;
+        case error.message.includes('No valid connection'):
+            console.error('IPC connection error:', error);
+            break;
+        case error.message.includes('ENOENT'):
+            // Do not log the IPC pipe not found error
+            break;
+        case error.message.includes('ECONNREFUSED'):
+            console.error('Discord is not running. Please start Discord and try again.');
+            break;
+        default:
+            console.error('Error with Discord IPC connection:', error);
+            break;
     }
-}*/
+});
 
+stopServer = async (): Promise<void> => {
+    return new Promise<void>((resolve, reject) => {
+        if (!server || !server.address()) return resolve();
+
+        console.log("Closing WebSocket server...");
+
+        for (var client of server.clients) {
+            client.close();
+            client.terminate();
+        }
+
+        if (!server.address()) {
+            console.log("WebSocket server is not running.");
+            return resolve();
+        }
+
+        server.close((err) => {
+            if (err) {
+                console.error(`Failed to close WebSocket server: ${err.message}`);
+            }
+            console.log("WebSocket server closed successfully.");
+            serverRunning = false;
+            resolve();
+        });
+    });
+};
 
 startServer = () => {
-
     console.log("Starting WebSocket server...");
 
     server = new WebSocket.Server({ port: port });
@@ -114,12 +103,7 @@ startServer = () => {
 
         ws.on('message', (message: string) => {
             try {
-
-                //console.log(`Received message: ${message}`);
-
                 var data = JSON.parse(message);
-
-                //console.log(data.activity);
 
                 switch (data.state) {
                     case true: activity_manager.setActivity(data.activity); break;
@@ -132,7 +116,7 @@ startServer = () => {
                 ws.send(JSON.stringify({ status_code: '400', message: 'Bad Request' }));
             }
         });
-        
+
         ws.on('close', (code: number, reason: string) => {
             console.log(`Client disconnected. Code: ${code}, Reason: ${reason}`);
             clearInterval(interval);
@@ -147,47 +131,5 @@ startServer = () => {
     });
 
     console.log(`WebSocket server is running on ws://localhost:${port}`);
-
-}
-
-function restartServer() {
-    try {
-        console.log("Closing server...");
-        server.close();
-
-        startServer();
-        //connect("1286301146281021440");
-    } catch (error: any) {
-        console.error(`Failed to restart server: ${error.message}`);
-    }
-}
-
-/*function connectRPC(retries: number = 10, delay: number = 5000): Promise<void> {
-    return new Promise((resolve, reject) => {
-        const attemptConnection = (attempt: number) => {
-            if (attempt > retries) {
-                return reject(new Error("Failed to connect to Discord RPC"));
-            }
-
-            rpc.login({ clientId: "1286301146281021440" }).then(() => {
-                console.log("Connected to Discord RPC");
-                resolve();
-            }).catch((error) => {
-                console.error(`Failed to connect to Discord RPC: ${error.message}`);
-                setTimeout(() => attemptConnection(attempt + 1), delay);
-            });
-        };
-
-        attemptConnection(1);
-    });
-}*/
-
-activity_manager.on('disconnected', () => {
-    console.log('Discord RPC disconnected');
-    restartServer();
-});
-
-activity_manager.on('ready', startServer)
-//startServer();
-//connect('1286301146281021440');
-//connectRPC();
+    serverRunning = true;
+};

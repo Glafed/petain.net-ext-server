@@ -11,6 +11,7 @@ enum EConnectionType {
 class WebSocketManager extends EventEmitter {
 
     private ws: WebSocket | null = null;
+    public retry: boolean = true;
     private id: string = '';
     private tries: number = 0;
 
@@ -44,13 +45,13 @@ class WebSocketManager extends EventEmitter {
     private onopen() {
         console.log("WebSocket connection opened.");
         this.tries = 0; // Reset tries on successful connection
-        console.log("Event 'ready' emitted");
-        this.emit('ready');
+        console.log("Event 'on' emitted");
+        this.emit('on');
     }
 
     private onclose(event: WebSocket.CloseEvent) {
         console.log(`WebSocket connection closed. Code: ${event.code}, Reason: ${event.reason}, Clean: ${event.wasClean}`);
-        this.emit('disconnect', event);
+        this.emit('off', event);
         if (this.tries < 10) {
             setTimeout(() => {
                 this.connect();
@@ -92,30 +93,20 @@ class WebSocketManager extends EventEmitter {
 class IPCManager extends EventEmitter {
     private clientId: string;
     private ipcPath: string;
+    public retry: boolean = true;
     private socket: net.Socket | null = null;
     private tries: number = 0;
 
     constructor(clientId: string) {
         super();
         this.clientId = clientId;
-        this.ipcPath = this.getIPCPath();
-    }
-
-    private getIPCPath(): string {
-        const platform = process.platform;
-        if (platform === 'win32') {
-            return `\\\\?\\pipe\\discord-ipc-0`;
-        } else {
-            const { env } = process;
-            const prefix = env.XDG_RUNTIME_DIR || env.TMPDIR || env.TMP || env.TEMP || '/tmp';
-            return `${prefix}/discord-ipc-0`;
-        }
+        this.ipcPath = process.platform === 'win32' ? '\\\\?\\pipe\\discord-ipc-0' : '/tmp/discord-ipc-0';;
     }
 
     public connect(): void {
         this.socket = net.createConnection(this.ipcPath, () => {
-            console.log('Connected to Discord IPC');
-            this.emit('ready');
+            //console.log('Connected to Discord IPC');
+            this.emit('on');
             this.sendHandshake();
         });
 
@@ -124,30 +115,26 @@ class IPCManager extends EventEmitter {
         });
 
         this.socket.on('close', () => {
-            console.log('Disconnected from Discord IPC');
-            this.emit('disconnected');
+            //console.log('Disconnected from Discord IPC');
+            this.emit('off');
             this.retryConnection();
         });
 
         this.socket.on('error', (error: Error) => {
-            if (error.message.includes('ECONNREFUSED')) {
+            /*if (error.message.includes('ENOENT')) {
+                console.error(`IPC pipe not found: ${this.ipcPath}`);
+            } else if (error.message.includes('ECONNREFUSED')) {
                 console.error('Discord is not running. Please start Discord and try again.');
             } else {
                 console.error('Error with Discord IPC connection:', error);
-            }
+            }*/
             this.emit('error', error);
-            this.retryConnection();
         });
     }
 
     private retryConnection(): void {
-        if (this.tries < 10) {
-            this.tries++;
-            console.log(`Retrying connection in ${5000 / 1000} seconds... (Attempt ${this.tries}/10)`);
-            setTimeout(() => this.connect(), 5000);
-        } else {
-            console.error('Max retries reached. Could not connect to Discord IPC.');
-        }
+            console.log(`Retrying connection in ${10000 / 1000} seconds... (Attempt ${this.tries}/10)`);
+            setTimeout(() => this.connect(), 10000);
     }
 
     private sendHandshake(): void {
@@ -202,21 +189,35 @@ export class DiscordActivity extends EventEmitter {//1286301146281021440
         this.connect();
     }
 
-    private connect() {
-        this.server.connect();
-        this.server.on('ready', () => {
-            console.log("Event 'ready' emitted");
+    private initialize() {
+        this.server.on('on', () => {
+            //console.log("Event 'ready' emitted");
             this.emit('ready');
         });
 
+        this.server.on('off', () => {
+            //console.log("Event 'disconnect' emitted");
+            this.emit('disconnect');
+        })
+
         this.server.on('message', (message: any) => {
-            console.log("WebSocket message received:", message);
-            if (message.cmd === 'SET_ACTIVITY' && message.evt === 'SUCCESS') {
-                console.log("Event 'activitySet' emitted");
-                this.emit('activitySet');
-            }
+            //TODO
+            //
         });
 
+        this.server.on('error', (error: Error) => {
+            //console.error("Event 'error' emitted");
+            this.emit('error', error);
+        })
+    }
+
+    private connect() {
+        this.server.connect();
+        this.initialize();
+    }
+
+    public retryConnection() {
+        this.connect();
     }
 
     private send(args: IActivityArgs) {
@@ -225,7 +226,8 @@ export class DiscordActivity extends EventEmitter {//1286301146281021440
             args,
             nonce: this.uuidv4()
         }
-        console.log("Sending data:", data);
+        console.log("Sending data.");
+        //console.log("Sending data:", data);
         this.server.send(data);
     }
 
@@ -238,7 +240,8 @@ export class DiscordActivity extends EventEmitter {//1286301146281021440
             activity: this.activity
         };
 
-        console.log("Setting activity:", this.activity);
+        console.log("Setting activity.");
+        //console.log("Setting activity:", this.activity);
         this.send(args);
     }
 
@@ -262,5 +265,10 @@ export class DiscordActivity extends EventEmitter {//1286301146281021440
         if (this.server) {
             this.server.disconnect();
         }
+    }
+
+    public enableRetry(bool: boolean)
+    {
+        this.server.retry = bool;
     }
 }
